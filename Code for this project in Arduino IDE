@@ -1,0 +1,171 @@
+#include <TinyGPS++.h>
+#include <SoftwareSerial.h>
+#include <ESP8266WiFi.h>
+
+TinyGPSPlus gps;
+SoftwareSerial SerialGPS(2, 1);
+
+const char* ssid = "SMILE";
+const char* password = "123456789";
+
+float Latitude, Longitude;
+int year, month, date, hour, minute, second;
+String DateString, TimeString, LatitudeString, LongitudeString;
+
+WiFiServer server(80);
+
+// Define geofence coordinates and radius (adjust these values as needed)
+float geofenceLatitude = 13.018884;
+float geofenceLongitude = 77.685043;
+float geofenceRadius = 10.0; // in meters
+
+void setup()
+{
+  Serial.begin(9600);
+  SerialGPS.begin(9600);
+  Serial.println();
+  Serial.print("Connecting");
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.println("WiFi connected");
+
+  server.begin();
+  Serial.println("Server started");
+  Serial.println(WiFi.localIP());
+}
+
+// Function to calculate distance between two GPS coordinates using Haversine formula
+double calculateDistance(float lat1, float lon1, float lat2, float lon2)
+{
+  // Convert latitude and longitude from degrees to radians
+  lat1 = radians(lat1);
+  lon1 = radians(lon1);
+  lat2 = radians(lat2);
+  lon2 = radians(lon2);
+
+  // Haversine formula
+  double dlon = lon2 - lon1;
+  double dlat = lat2 - lat1;
+  double a = pow(sin(dlat / 2), 2) + cos(lat1) * cos(lat2) * pow(sin(dlon / 2), 2);
+  double c = 2 * atan2(sqrt(a), sqrt(1 - a));
+  double distance = 6371000.0 * c; // Radius of Earth in meters
+
+  return distance;
+}
+
+void loop()
+{
+  while (SerialGPS.available() > 0)
+    if (gps.encode(SerialGPS.read()))
+    {
+      if (gps.location.isValid())
+      {
+        Latitude = gps.location.lat();
+        LatitudeString = String(Latitude, 6);
+        Longitude = gps.location.lng();
+        LongitudeString = String(Longitude, 6);
+      }
+
+      if (gps.date.isValid())
+      {
+        DateString = "";
+        date = gps.date.day();
+        month = gps.date.month();
+        year = gps.date.year();
+
+        if (date < 10)
+          DateString = '0';
+        DateString += String(date);
+
+        DateString += " / ";
+
+        if (month < 10)
+          DateString += '0';
+        DateString += String(month);
+        DateString += " / ";
+
+        if (year < 10)
+          DateString += '0';
+        DateString += String(year);
+      }
+
+      if (gps.time.isValid())
+      {
+        TimeString = "";
+        hour = gps.time.hour() + 5; //adjust UTC
+        minute = gps.time.minute();
+        second = gps.time.second();
+
+        if (hour < 10)
+          TimeString = '0';
+        TimeString += String(hour);
+        TimeString += " : ";
+
+        if (minute < 10)
+          TimeString += '0';
+        TimeString += String(minute);
+        TimeString += " : ";
+
+        if (second < 10)
+          TimeString += '0';
+        TimeString += String(second);
+      }
+    }
+
+  // Calculate the distance from current location to geofence
+  double distanceToGeofence = calculateDistance(Latitude, Longitude, geofenceLatitude, geofenceLongitude);
+
+  // Check if the distance is within the geofence radius
+  bool insideGeofence = (distanceToGeofence <= geofenceRadius);
+
+  WiFiClient client = server.available();
+  if (!client)
+  {
+    return;
+  }
+
+  // Response
+  String s = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n <!DOCTYPE html> <html> <head> <title>River Otter tracking system </title> <style>";
+  // ... (other HTML code)
+
+  s += "<p ALIGN=CENTER style=""font-size:150%;""";
+  s += "> <b>Location Details</b></p> <table ALIGN=CENTER style=";
+  s += "width:50%";
+  s += "> <tr> <th>Latitude</th>";
+  s += "<td ALIGN=CENTER >";
+  s += LatitudeString;
+  s += "</td> </tr> <tr> <th>Longitude</th> <td ALIGN=CENTER >";
+  s += LongitudeString;
+  s += "</td> </tr> <tr>  <th>Date</th> <td ALIGN=CENTER >";
+  s += DateString;
+  s += "</td></tr> <tr> <th>Time</th> <td ALIGN=CENTER >";
+  s += TimeString;
+  s += "</td>  </tr> </table> ";
+
+  // Include geofence status in the response
+  s += "<p ALIGN=CENTER style=""font-size:150%;""";
+  s += "> <b>Geofence Status</b></p> <p ALIGN=CENTER>";
+  if (insideGeofence)
+  {
+    s += "Inside Geofence";
+  }
+  else
+  {
+    s += "Outside Geofence";
+    // Send an alert if outside the geofence
+    // You can customize this alert message as needed
+    s += "<p ALIGN=CENTER style=""color:RED;font-size:150%;"">ALERT: Outside Geofence!</p>";
+  }
+
+  // ... (continue with the HTML response)
+
+  s += "</body> </html> \n";
+
+  client.print(s);
+  delay(100);
+}
